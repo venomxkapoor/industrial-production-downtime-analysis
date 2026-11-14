@@ -1,5 +1,0 @@
-policy,work_centre,Number of orders,Late orders,Late orders (%),Average waiting time (h),Average flow time (h),Average tardiness (h),Total tardiness (h),Maximum lateness (h),Total processing time (h),Makespan (h)
-FIFO,WC1,49,31,63.3,108.07,112.28,39.19,1920.5,153.0,206.0,206.0
-FIFO,WC2,31,8,25.8,65.58,69.47,10.15,314.5,71.0,120.5,120.5
-EDD,WC1,49,41,83.7,106.36,110.56,21.91,1073.5,46.0,206.0,206.0
-EDD,WC2,31,0,0.0,60.0,63.89,0.0,0.0,-5.0,120.5,120.5

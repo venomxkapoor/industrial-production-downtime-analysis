@@ -1,3 +1,0 @@
-work_centre,number_of_orders,assigned_hours,capacity_budget_h,capacity_pressure_ratio,overload_h,is_overloaded
-WC1,49,206.0,160,1.288,46.0,True
-WC2,31,120.5,160,0.753,0.0,False
