@@ -1,5 +1,6 @@
 """Tests for industrial production and downtime analysis."""
 
+import hashlib
 from pathlib import Path
 import sys
 import openpyxl
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from analyse_production import (
+    build_report_text,
     build_summaries,
     calculate_run_metrics,
     load_and_check_data,
@@ -108,3 +110,30 @@ def test_generated_files_and_excel_sheets():
     assert wb.sheetnames == ["Selected Data", "KPI Summary", "Period Comparison"]
     assert wb["Selected Data"]["C61"].value == "=SUM(C2:C60)"
     assert wb["KPI Summary"]["B6"].value == 60888
+
+
+def test_dynamic_report_text_and_discrepancies():
+    raw_bytes = (ROOT / "data" / "production_raw.xlsx").read_bytes()
+    assert hashlib.md5(raw_bytes).hexdigest() == "d9c095d5eba8706ac7dda92af63f5c35"
+
+    raw_df, ev_count, ev_days = load_and_check_data(ROOT / "data" / "production_raw.xlsx")
+    run_df = calculate_run_metrics(raw_df)
+    _, kpi_df, product_df, monthly_df = build_summaries(run_df, ev_count, ev_days)
+    subtitle, prov, notes, kpi_title, month_title = build_report_text(run_df, kpi_df, product_df, monthly_df)
+
+    prov_flat = " ".join(prov.split())
+    notes_flat = " ".join(notes.split())
+    assert "2022-07-22 to 2023-02-10" in subtitle
+    assert kpi_title == "Overall KPI Summary (59 Runs / 56 Dates)"
+    assert month_title == "Monthly Summary (2022-07 to 2023-02)"
+    for expected in ["60,888 units", "212,358 L", "238.65 monitored hours", "44.70%", "38.22%"]:
+        assert expected in prov_flat
+    for expected in ["15 of 59 runs", "+0.72 h", "0.618 h", "37.1 min", "100.30%", "2022-12", "2023-01"]:
+        assert expected in notes_flat
+
+    alt_kpi = kpi_df.copy()
+    alt_kpi.loc[alt_kpi["Metric"] == "Total Production Units", "Value"] = 99999
+    _, alt_prov, _, _, _ = build_report_text(run_df, alt_kpi, product_df, monthly_df)
+    alt_flat = " ".join(alt_prov.split())
+    assert "99,999 units" in alt_flat
+    assert "60,888 units" not in alt_flat

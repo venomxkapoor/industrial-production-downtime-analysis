@@ -17,10 +17,11 @@ A transparent, beginner-friendly industrial operations analysis using genuine 20
 ## Official Dataset Provenance
 
 - **Title**: *Industrial Production Time-Series Dataset from a Beverage Bottling Line*
+- **Contributors (Creators & Editors)**: **Gabriel Augusto David** (Universidade de São Paulo), **Paulo Monteiro de Carvalho Monson** (Universidade de São Paulo), and **Cristiano Soares Junior** (Universidade Estadual Paulista (Unesp))
 - **Source Repository**: Zenodo (`https://zenodo.org/records/18146866`)
 - **DOI**: `10.5281/zenodo.18146866`
 - **Licence**: Creative Commons Attribution 4.0 International (**CC BY 4.0**) — see [LICENSE_DATA.md](LICENSE_DATA.md)
-- **File**: `data/production_raw.xlsx` (preserved unmodified)
+- **File**: `data/production_raw.xlsx` (preserved unmodified; 128,423 bytes, MD5: `d9c095d5eba8706ac7dda92af63f5c35`)
 
 These are **real historical operational records** released through a public research dataset. They represent preprocessed daily and hourly operational summaries rather than raw PLC sensor streams.
 
@@ -91,7 +92,7 @@ These are **real historical operational records** released through a public rese
 
 ## Data Quality Notes & Limitations
 
-1. **Time-Balance Discrepancy in Source Records**: On 44 of 59 runs, `operation_time_dec + pause_time_dec` matches `monitored_time_dec` within 0.01 h. Across the remaining 15 runs, small timing offsets lead to a cumulative `+0.72 h` difference (`101.81 + 137.56 = 239.37 h` vs. `238.65 h` monitored), so weighted efficiency (42.66%) plus weighted downtime (57.64%) sums to 100.30%.
+1. **Time-Balance Discrepancy in Source Records**: Across the 59 runs, total monitored time is `238.65 h`, total operating time is `101.81 h`, and total pause time is `137.56 h`, giving a cumulative net time-balance difference (`operation + pause - monitored`) of `+0.72 h` (`101.81 + 137.56 = 239.37 h` vs. `238.65 h`). Specifically, 15 of the 59 runs have an absolute time-balance discrepancy greater than `0.01 h`, and the largest single-run absolute discrepancy is `0.618 h` (`37.1` minutes, on `2022-12-23`, 5 L run). Because `0.618 h` is far too large to dismiss as a rounding artifact, the original workbook values are preserved unaltered rather than forced to balance. Time-weighted efficiency (`42.66%`) and time-weighted downtime (`57.64%`) are calculated independently against `monitored_time_dec`, which is why their sum equals `100.30%` rather than `100.00%`.
 2. **Inconsistent Denominator in Source `gallons_per_hour`**: Checking the source workbook shows `gallons_per_hour` matches `production_units / operation_time_dec` in the first 18 rows and `production_units / monitored_time_dec` in 40 of the remaining 41 rows. Therefore, this analysis separates source-reported `gallons_per_hour` from the consistently defined `calc_units_per_op_hour` (`production_units / operation_time_dec`).
 3. **No Root-Cause Attribution**: The public dataset does not include failure reason codes, changeover logs, operator shifts, or maintenance records. High pause percentages indicate periods worth investigating locally, not proven equipment faults or staffing issues.
 4. **Scope**: This is a descriptive operational analysis built as an educational portfolio project using Python, pandas, openpyxl, and matplotlib.

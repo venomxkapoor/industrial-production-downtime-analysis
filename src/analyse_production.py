@@ -198,22 +198,104 @@ def save_excel(run_df, daily_df, kpi_df, product_df, monthly_df, top_dt_df, xlsx
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 38)
     wb.save(xlsx_out)
 
-def save_pdf_report(kpi_df, product_df, monthly_df, charts_dir, pdf_path):
+def build_report_text(run_df, kpi_df, product_df, monthly_df):
+    """Derive all PDF summary text and time-balance discrepancy metrics from calculated DataFrames."""
+    kpi = dict(zip(kpi_df["Metric"], kpi_df["Value"]))
+    runs = int(kpi["Production Runs Recorded"])
+    unique_dates = int(kpi["Unique Operating Dates"])
+    stop_events = int(kpi["Logged Stop Events"])
+    total_units = int(kpi["Total Production Units"])
+    total_liters = int(kpi["Total Volume Produced"])
+    mon_h = float(kpi["Total Monitored Time"])
+    op_h = float(kpi["Total Operating Time"])
+    pause_h = float(kpi["Total Pause / Downtime"])
+    w_eff = float(kpi["Time-Weighted Efficiency"])
+    w_dt = float(kpi["Time-Weighted Downtime"])
+
+    multi_run_dates = int((run_df.groupby("date_str").size() > 1).sum())
+    min_date, max_date = run_df["date_str"].min(), run_df["date_str"].max()
+    min_month, max_month = monthly_df["year_month"].min(), monthly_df["year_month"].max()
+
+    best_prod = product_df.loc[product_df["weighted_eff_pct"].idxmax()]
+    other_prods = product_df[product_df["product_type_l"] != best_prod["product_type_l"]]
+    if not other_prods.empty:
+        other_row = other_prods.iloc[0]
+        prod_cmp = (
+            f"{int(best_prod['product_type_l'])}L runs achieved higher weighted efficiency "
+            f"({best_prod['weighted_eff_pct']:.2f}%) than {int(other_row['product_type_l'])}L runs "
+            f"({other_row['weighted_eff_pct']:.2f}%)."
+        )
+    else:
+        prod_cmp = (
+            f"{int(best_prod['product_type_l'])}L runs achieved "
+            f"{best_prod['weighted_eff_pct']:.2f}% weighted efficiency."
+        )
+
+    peak_out = monthly_df.loc[monthly_df["production_units"].idxmax()]
+    peak_pause = monthly_df.loc[monthly_df["pause_hours"].idxmax()]
+    best_eff_m = monthly_df.loc[monthly_df["weighted_eff_pct"].idxmax()]
+    if peak_out["year_month"] == peak_pause["year_month"]:
+        month_obs = (
+            f"{peak_out['year_month']} had both the highest output ({int(peak_out['production_units']):,} units) "
+            f"and pause time ({peak_pause['pause_hours']:.2f} h; {peak_pause['weighted_downtime_pct']:.2f}% downtime), "
+            f"while {best_eff_m['year_month']} had the highest weighted efficiency ({best_eff_m['weighted_eff_pct']:.2f}%)."
+        )
+    else:
+        month_obs = (
+            f"{peak_out['year_month']} had the highest output ({int(peak_out['production_units']):,} units) and "
+            f"{peak_pause['year_month']} had the highest pause time ({peak_pause['pause_hours']:.2f} h; "
+            f"{peak_pause['weighted_downtime_pct']:.2f}% downtime), while {best_eff_m['year_month']} had the highest "
+            f"weighted efficiency ({best_eff_m['weighted_eff_pct']:.2f}%)."
+        )
+
+    diff = run_df["operation_time_dec"] + run_df["pause_time_dec"] - run_df["monitored_time_dec"]
+    disc_runs = int((diff.abs() > 0.01).sum())
+    net_diff_h = float(diff.sum())
+    max_diff_h = float(diff.abs().max()) if len(run_df) else 0.0
+    max_diff_min = max_diff_h * 60.0
+
+    subtitle_dates = f"Beverage Bottling Line Operations ({min_date} to {max_date}) | Zenodo DOI: 10.5281/zenodo.18146866 (CC BY 4.0)"
+    kpi_title = f"Overall KPI Summary ({runs} Runs / {unique_dates} Dates)"
+    month_title = f"Monthly Summary ({min_month} to {max_month})"
+    prov = (
+        textwrap.fill(
+            f"1. Provenance & Scope: Real historical records from daily_operation_summary ({runs} production runs across "
+            f"{unique_dates} dates; {stop_events:,} supplementary stop records in downtime_event_log). On {multi_run_dates} dates "
+            "with multiple runs (3L and 5L), start/end timestamps do not overlap.",
+            92,
+        )
+        + "\n"
+        + textwrap.fill(
+            f"2. Key Findings: Total output was {total_units:,} units ({total_liters:,} L) across {mon_h:.2f} monitored hours "
+            f"({op_h:.2f} operating h, {pause_h:.2f} pause h). Time-weighted efficiency was {w_eff:.2f}% and downtime was "
+            f"{w_dt:.2f}%. {prod_cmp}",
+            92,
+        )
+    )
+    notes = textwrap.fill(
+        f"Observations & Limitations: (1) {month_obs} "
+        f"(2) Source time-balance discrepancy: {disc_runs} of {runs} runs have |operation + pause - monitored| > 0.01 h "
+        f"({net_diff_h:+.2f} h cumulative net diff; max single-run diff {max_diff_h:.3f} h / {max_diff_min:.1f} min). "
+        f"Source data is unaltered and discrepancies are not mere rounding errors; efficiency ({w_eff:.2f}%) and "
+        f"downtime ({w_dt:.2f}%) are computed independently from monitored time, so their sum ({w_eff + w_dt:.2f}%) differs from 100%. "
+        "(3) Source gallons_per_hour uses units/operating_time in rows 1-18 and units/monitored_time in most later rows, "
+        "so consistent operating-hour rates are reported separately. (4) No fault codes exist; pauses are not assumed breakdowns.",
+        102,
+    )
+    return subtitle_dates, prov, notes, kpi_title, month_title
+
+def save_pdf_report(run_df, kpi_df, product_df, monthly_df, charts_dir, pdf_path):
     """Build a concise 2-page PDF report matching saved CSV and Excel values."""
+    subtitle_dates, prov, notes, kpi_title, month_title = build_report_text(run_df, kpi_df, product_df, monthly_df)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(pdf_path) as pdf:
         fig = plt.figure(figsize=(8.27, 11.69))
         fig.text(0.07, 0.94, "Industrial Production & Downtime Analysis", fontsize=17, fontweight="bold", color="#1f4e78")
-        fig.text(0.07, 0.915, "Beverage Bottling Line Operations (2022-07-22 to 2023-02-10) | Zenodo DOI: 10.5281/zenodo.18146866 (CC BY 4.0)", fontsize=8.5, color="#444444")
-        prov = (
-            textwrap.fill("1. Provenance & Scope: Real historical records from daily_operation_summary (59 production runs across 56 dates; 1,388 supplementary stop records in downtime_event_log). On 3 dates with both 3L and 5L runs, start/end timestamps do not overlap.", 92)
-            + "\n"
-            + textwrap.fill("2. Key Findings: Total output was 60,888 units (212,358 L) across 238.65 monitored hours (101.81 operating h, 137.56 pause h). Time-weighted efficiency was 42.66% and downtime was 57.64%. 3L runs achieved higher weighted efficiency (44.70%) than 5L runs (38.22%).", 92)
-        )
+        fig.text(0.07, 0.915, subtitle_dates, fontsize=8.5, color="#444444")
         fig.text(0.07, 0.88, prov, fontsize=8.8, va="top", bbox=dict(boxstyle="round,pad=0.5", fc="#f4f7fa", ec="#c5d3e0"))
         ax1 = fig.add_axes([0.07, 0.35, 0.86, 0.39])
         ax1.axis("off")
-        ax1.set_title("Overall KPI Summary (59 Runs / 56 Dates)", loc="left", fontsize=10.5, fontweight="bold")
+        ax1.set_title(kpi_title, loc="left", fontsize=10.5, fontweight="bold")
         t1 = ax1.table(cellText=kpi_df.values, colLabels=kpi_df.columns, loc="center", cellLoc="left", colWidths=[0.28, 0.13, 0.13, 0.46])
         t1.auto_set_font_size(False)
         t1.set_fontsize(7.8)
@@ -231,26 +313,19 @@ def save_pdf_report(kpi_df, product_df, monthly_df, charts_dir, pdf_path):
 
         fig = plt.figure(figsize=(8.27, 11.69))
         fig.text(0.07, 0.945, "Period Trends, Charts & Limitations", fontsize=14, fontweight="bold", color="#1f4e78")
-        ax_m = fig.add_axes([0.07, 0.67, 0.86, 0.24])
+        ax_m = fig.add_axes([0.07, 0.68, 0.86, 0.23])
         ax_m.axis("off")
-        ax_m.set_title("Monthly Summary (2022-07 to 2023-02)", loc="left", fontsize=10, fontweight="bold")
+        ax_m.set_title(month_title, loc="left", fontsize=10, fontweight="bold")
         m_cols = ["year_month", "runs", "unique_dates", "production_units", "monitored_hours", "operating_hours", "pause_hours", "weighted_eff_pct", "weighted_downtime_pct"]
         tm = ax_m.table(cellText=monthly_df[m_cols].values, colLabels=["Month", "Runs", "Days", "Units", "Mon h", "Op h", "Pause h", "W. Eff %", "W. DT %"], loc="center", cellLoc="center")
         tm.auto_set_font_size(False)
         tm.set_fontsize(8)
         tm.scale(1, 1.25)
-        for ax_box, img_name in [([0.06, 0.40, 0.88, 0.25], "daily_production_and_downtime.png"), ([0.06, 0.16, 0.88, 0.22], "monthly_efficiency_and_downtime.png")]:
+        for ax_box, img_name in [([0.06, 0.415, 0.88, 0.245], "daily_production_and_downtime.png"), ([0.06, 0.175, 0.88, 0.22], "monthly_efficiency_and_downtime.png")]:
             ax = fig.add_axes(ax_box)
             ax.imshow(mpimg.imread(charts_dir / img_name))
             ax.axis("off")
-        notes = textwrap.fill(
-            "Observations & Limitations: (1) December 2022 had the highest volume (16,051 units) and pause time (50.29 h; 63.42% downtime), "
-            "while January 2023 had the highest weighted efficiency (53.98%). (2) On 15 runs, operation + pause hours differ slightly from monitored hours "
-            "(+0.72 h net total). (3) Source gallons_per_hour uses units/operating_time in rows 1-18 and units/monitored_time in most later rows, so we report "
-            "consistent operating-hour rates separately. (4) Data does not include fault codes or root causes; pauses should not be assumed to be breakdowns.",
-            98,
-        )
-        fig.text(0.07, 0.14, notes, fontsize=8.2, va="top", bbox=dict(boxstyle="round,pad=0.45", fc="#fff9f0", ec="#e0c9a6"))
+        fig.text(0.07, 0.155, notes, fontsize=7.9, va="top", bbox=dict(boxstyle="round,pad=0.45", fc="#fff9f0", ec="#e0c9a6"))
         pdf.savefig(fig)
         plt.close(fig)
 
@@ -266,7 +341,7 @@ def run_pipeline(base_dir):
     run_df.to_csv(out_dir / "daily_summary.csv", index=False)
     save_charts(daily_df, monthly_df, out_dir / "charts")
     save_excel(run_df, daily_df, kpi_df, product_df, monthly_df, top_dt_df, out_dir / "production_summary.xlsx")
-    save_pdf_report(kpi_df, product_df, monthly_df, out_dir / "charts", base / "reports" / "production_report.pdf")
+    save_pdf_report(run_df, kpi_df, product_df, monthly_df, out_dir / "charts", base / "reports" / "production_report.pdf")
     return run_df, daily_df, kpi_df, product_df, monthly_df
 
 if __name__ == "__main__":
