@@ -14,6 +14,7 @@ from analyse_production import (
     build_report_text,
     build_summaries,
     calculate_run_metrics,
+    find_run_overlaps,
     load_and_check_data,
     run_pipeline,
     safe_pct,
@@ -62,6 +63,18 @@ def test_duplicate_dates_aggregation_no_double_counting():
     assert daily_df["monitored_hours"].sum() == pytest.approx(238.65, abs=0.1)
 
 
+def test_multi_run_dates_have_no_timestamp_overlap():
+    df, _, _ = load_and_check_data(ROOT / "data" / "production_raw.xlsx")
+    multi_run_dates = df.groupby("date").size()
+    assert int((multi_run_dates == 2).sum()) == 3
+    assert multi_run_dates[multi_run_dates == 2].index.strftime("%Y-%m-%d").tolist() == [
+        "2022-09-28",
+        "2022-10-10",
+        "2022-10-24",
+    ]
+    assert find_run_overlaps(df).empty
+
+
 def test_overall_and_product_kpis():
     df, ev_count, ev_days = load_and_check_data(ROOT / "data" / "production_raw.xlsx")
     run_df = calculate_run_metrics(df)
@@ -75,6 +88,24 @@ def test_overall_and_product_kpis():
     assert int(p3["runs"]) == 39 and int(p3["production_units"]) == 46041
     assert int(p5["runs"]) == 20 and int(p5["production_units"]) == 14847
     assert len(monthly_df) == 8
+    assert int(product_df["production_units"].sum()) == 60888
+    assert int(product_df["liters_produced"].sum()) == 212358
+    assert int(monthly_df["production_units"].sum()) == 60888
+    assert int(monthly_df["liters_produced"].sum()) == 212358
+
+
+def test_full_precision_time_balance_and_weighted_percentages():
+    df, _, _ = load_and_check_data(ROOT / "data" / "production_raw.xlsx")
+    monitored = df["monitored_time_dec"].sum()
+    operating = df["operation_time_dec"].sum()
+    pause = df["pause_time_dec"].sum()
+    difference = operating + pause - monitored
+    assert monitored == pytest.approx(238.65463694444426)
+    assert operating == pytest.approx(101.8089752777777)
+    assert pause == pytest.approx(137.56440277777767)
+    assert difference == pytest.approx(0.7187411111111006)
+    assert operating / monitored * 100 == pytest.approx(42.6595421, abs=1e-6)
+    assert pause / monitored * 100 == pytest.approx(57.6416216, abs=1e-6)
 
 
 def test_zero_division_and_invalid_input_guards():
@@ -94,9 +125,11 @@ def test_zero_division_and_invalid_input_guards():
 
 def test_generated_files_and_excel_sheets():
     run_pipeline(ROOT)
+    run_csv_path = ROOT / "outputs" / "run_summary.csv"
     csv_path = ROOT / "outputs" / "daily_summary.csv"
     xlsx_path = ROOT / "outputs" / "production_summary.xlsx"
     pdf_path = ROOT / "reports" / "production_report.pdf"
+    assert run_csv_path.exists()
     assert csv_path.exists()
     assert xlsx_path.exists()
     assert pdf_path.exists()
@@ -104,8 +137,16 @@ def test_generated_files_and_excel_sheets():
     assert (ROOT / "outputs" / "charts" / "daily_production_and_downtime.png").exists()
     assert (ROOT / "outputs" / "charts" / "monthly_efficiency_and_downtime.png").exists()
 
-    saved = pd.read_csv(csv_path)
-    assert len(saved) == 59
+    saved_runs = pd.read_csv(run_csv_path)
+    saved_days = pd.read_csv(csv_path)
+    assert len(saved_runs) == 59
+    assert len(saved_days) == 56
+    assert saved_days["date_str"].nunique() == 56
+    assert int(saved_days["runs"].sum()) == 59
+    assert int(saved_days["production_units"].sum()) == 60888
+    assert saved_days["monitored_hours"].sum() == pytest.approx(
+        saved_runs["monitored_time_dec"].sum()
+    )
     wb = openpyxl.load_workbook(xlsx_path, data_only=False)
     assert wb.sheetnames == ["Selected Data", "KPI Summary", "Period Comparison"]
     assert wb["Selected Data"]["C61"].value == "=SUM(C2:C60)"
@@ -128,7 +169,7 @@ def test_dynamic_report_text_and_discrepancies():
     assert month_title == "Monthly Summary (2022-07 to 2023-02)"
     for expected in ["60,888 units", "212,358 L", "238.65 monitored hours", "44.70%", "38.22%"]:
         assert expected in prov_flat
-    for expected in ["15 of 59 runs", "+0.72 h", "0.618 h", "37.1 min", "100.30%", "2022-12", "2023-01"]:
+    for expected in ["15 of 59 runs", "+0.72 h", "0.618 h", "37.1 min", "100.30%", "2022-12", "2023-01", "18 runs", "40 runs", "1 run matches neither"]:
         assert expected in notes_flat
 
     alt_kpi = kpi_df.copy()

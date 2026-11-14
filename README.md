@@ -92,7 +92,7 @@ These are **real historical operational records** released through a public rese
 
 ## Data Quality Notes & Limitations
 
-1. **Time-Balance Discrepancy in Source Records**: Across the 59 runs, total monitored time is `238.65 h`, total operating time is `101.81 h`, and total pause time is `137.56 h`, giving a cumulative net time-balance difference (`operation + pause - monitored`) of `+0.72 h` (`101.81 + 137.56 = 239.37 h` vs. `238.65 h`). Specifically, 15 of the 59 runs have an absolute time-balance discrepancy greater than `0.01 h`, and the largest single-run absolute discrepancy is `0.618 h` (`37.1` minutes, on `2022-12-23`, 5 L run). Because `0.618 h` is far too large to dismiss as a rounding artifact, the original workbook values are preserved unaltered rather than forced to balance. Time-weighted efficiency (`42.66%`) and time-weighted downtime (`57.64%`) are calculated independently against `monitored_time_dec`, which is why their sum equals `100.30%` rather than `100.00%`.
+1. **Time-Balance Discrepancy in Source Records**: At source precision, the totals are `238.654637` monitored hours, `101.808975` operating hours and `137.564403` pause hours. This gives a cumulative net time-balance difference (`operation + pause - monitored`) of `+0.718741 h`, shown as approximately `+0.72 h` in the report. Specifically, 15 of the 59 runs have an absolute time-balance discrepancy greater than `0.01 h`, and the largest single-run absolute discrepancy is `0.618 h` (`37.1` minutes, on `2022-12-23`, 5 L run). Because `0.618 h` is far too large to dismiss as a rounding artifact, the original workbook values are preserved unaltered rather than forced to balance. Time-weighted efficiency (`42.66%`) and time-weighted downtime (`57.64%`) are calculated independently against `monitored_time_dec`, which is why their sum equals `100.30%` rather than `100.00%`.
 2. **Inconsistent Denominator in Source `gallons_per_hour`**: Checking the source workbook shows `gallons_per_hour` matches `production_units / operation_time_dec` in the first 18 rows and `production_units / monitored_time_dec` in 40 of the remaining 41 rows. Therefore, this analysis separates source-reported `gallons_per_hour` from the consistently defined `calc_units_per_op_hour` (`production_units / operation_time_dec`).
 3. **No Root-Cause Attribution**: The public dataset does not include failure reason codes, changeover logs, operator shifts, or maintenance records. High pause percentages indicate periods worth investigating locally, not proven equipment faults or staffing issues.
 4. **Scope**: This is a descriptive operational analysis built as an educational portfolio project using Python, pandas, openpyxl, and matplotlib.
@@ -112,6 +112,7 @@ industrial-production-downtime-analysis/
 │   └── analyse_production.py
 ├── outputs/
 │   ├── daily_summary.csv
+│   ├── run_summary.csv
 │   ├── production_summary.xlsx
 │   └── charts/
 │       ├── daily_production_and_downtime.png
@@ -121,6 +122,11 @@ industrial-production-downtime-analysis/
 └── tests/
     └── test_analysis.py
 ```
+
+`run_summary.csv` contains the 59 source production runs with calculated fields.
+`daily_summary.csv` is a separate aggregation containing 56 unique operating
+dates. The daily values are calculated from the run records without rounding
+the time totals before export.
 
 ---
 
@@ -136,3 +142,10 @@ python src/analyse_production.py
 # 3. Run the automated verification suite
 python -m pytest -v
 ```
+
+## Licensing note
+
+`LICENSE_DATA.md` records the Zenodo dataset's CC BY 4.0 attribution and
+licence. It does not apply a separate software licence to this repository's
+code; no additional permission for code reuse is granted unless the repository
+owner states one.

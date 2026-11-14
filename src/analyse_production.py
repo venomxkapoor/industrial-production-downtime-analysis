@@ -58,36 +58,79 @@ def calculate_run_metrics(df):
     out["calc_liters_per_op_hour"] = l_rate
     return out
 
-def summarize_by_group(df, group_col):
+
+def find_run_overlaps(df):
+    """Return any same-date run pairs whose recorded time intervals overlap."""
+    work = df.copy()
+    date_text = work["date"].dt.strftime("%Y-%m-%d")
+    work["_start"] = pd.to_datetime(
+        date_text + " " + work["production_start_time"].astype(str), format="mixed"
+    )
+    work["_end"] = pd.to_datetime(
+        date_text + " " + work["production_end_time"].astype(str), format="mixed"
+    )
+
+    overlaps = []
+    for date, group in work.sort_values(["date", "_start"]).groupby("date"):
+        previous_end = None
+        for _, row in group.iterrows():
+            if previous_end is not None and row["_start"] < previous_end:
+                overlaps.append(
+                    {
+                        "date": date,
+                        "overlap_start": row["_start"],
+                        "previous_end": previous_end,
+                    }
+                )
+            if previous_end is None or row["_end"] > previous_end:
+                previous_end = row["_end"]
+    return pd.DataFrame(overlaps)
+
+
+def summarize_by_group(df, group_col, round_values=True):
     """Aggregate production, time, and weighted/mean KPIs by group_col."""
     rows = []
     for key, g in df.groupby(group_col, sort=True):
         mon, op, pause = g["monitored_time_dec"].sum(), g["operation_time_dec"].sum(), g["pause_time_dec"].sum()
         units, liters = int(g["production_units"].sum()), int(g["liters_produced"].sum())
+        time_values = [mon, op, pause]
+        if round_values:
+            time_values = [round(value, 2) for value in time_values]
         rows.append({
             group_col: key, "runs": len(g), "unique_dates": int(g["date_str"].nunique()),
             "production_units": units, "liters_produced": liters,
-            "monitored_hours": round(mon, 2), "operating_hours": round(op, 2), "pause_hours": round(pause, 2),
-            "weighted_eff_pct": round(safe_pct(op, mon), 2), "mean_eff_pct": round(g["calc_efficiency_pct"].mean(), 2),
-            "weighted_downtime_pct": round(safe_pct(pause, mon), 2), "mean_downtime_pct": round(g["downtime_pct"].mean(), 2),
-            "overall_units_per_op_h": round(safe_rate(units, op), 2),
-            "mean_units_per_op_h": round(g["calc_units_per_op_hour"].mean(), 2),
-            "mean_liters_per_op_h": round(g["calc_liters_per_op_hour"].mean(), 2),
+            "monitored_hours": time_values[0], "operating_hours": time_values[1], "pause_hours": time_values[2],
+            "weighted_eff_pct": safe_pct(op, mon), "mean_eff_pct": g["calc_efficiency_pct"].mean(),
+            "weighted_downtime_pct": safe_pct(pause, mon), "mean_downtime_pct": g["downtime_pct"].mean(),
+            "overall_units_per_op_h": safe_rate(units, op),
+            "mean_units_per_op_h": g["calc_units_per_op_hour"].mean(),
+            "mean_liters_per_op_h": g["calc_liters_per_op_hour"].mean(),
         })
-    return pd.DataFrame(rows)
+    result = pd.DataFrame(rows)
+    if round_values:
+        metric_columns = [
+            "weighted_eff_pct", "mean_eff_pct", "weighted_downtime_pct",
+            "mean_downtime_pct", "overall_units_per_op_h",
+            "mean_units_per_op_h", "mean_liters_per_op_h",
+        ]
+        result[metric_columns] = result[metric_columns].round(2)
+    return result
 
 def build_summaries(run_df, event_count, event_days):
     """Compute 56-day calendar totals, overall KPIs, product summary, and monthly summary."""
-    daily_df = summarize_by_group(run_df, "date_str").drop(columns=["unique_dates"])
+    daily_df = summarize_by_group(
+        run_df, "date_str", round_values=False
+    ).drop(columns=["unique_dates"])
     product_df = summarize_by_group(run_df, "product_type_l")
     monthly_df = summarize_by_group(run_df, "year_month")
     mon = run_df["monitored_time_dec"].sum()
     op = run_df["operation_time_dec"].sum()
     pause = run_df["pause_time_dec"].sum()
     units, liters = int(run_df["production_units"].sum()), int(run_df["liters_produced"].sum())
+    multi_run_dates = int((run_df.groupby("date_str").size() > 1).sum())
     kpi_rows = [
         ("Production Runs Recorded", len(run_df), "runs", "Rows in daily_operation_summary"),
-        ("Unique Operating Dates", int(run_df["date_str"].nunique()), "days", "3 dates had 2 non-overlapping runs"),
+        ("Unique Operating Dates", int(run_df["date_str"].nunique()), "days", f"{multi_run_dates} dates had multiple runs"),
         ("Logged Stop Events", event_count, "events", f"Rows in downtime_event_log ({event_days} dates)"),
         ("Total Production Units", units, "bottles", "3L and 5L bottles combined"),
         ("Total Volume Produced", liters, "liters", "Sum of liters_produced (units x size)"),
@@ -110,7 +153,10 @@ def save_charts(daily_df, monthly_df, charts_dir):
     x = range(len(daily_df))
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6.2), sharex=True)
     ax1.bar(x, daily_df["production_units"], color="#2b5c8f")
-    ax1.set_title("Daily Bottle Output Across 56 Operating Dates (2022-07 to 2023-02)")
+    ax1.set_title(
+        f"Daily Bottle Output Across {len(daily_df)} Operating Dates "
+        f"({daily_df['date_str'].min()[:7]} to {daily_df['date_str'].max()[:7]})"
+    )
     ax1.set_ylabel("Units Produced")
     ax2.bar(x, daily_df["operating_hours"], color="#2e8b57", label="Operating Hours")
     ax2.bar(x, daily_df["pause_hours"], bottom=daily_df["operating_hours"], color="#d95f02", label="Pause Hours")
@@ -184,7 +230,12 @@ def save_excel(run_df, daily_df, kpi_df, product_df, monthly_df, top_dt_df, xlsx
     ws1.cell(end_r, 14, f"=C{end_r}/H{end_r}").number_format = "0.00"
 
     ws2 = wb.create_sheet("KPI Summary")
-    r = write_df_to_sheet(ws2, kpi_df, start_row=1, title="Overall Production & Downtime KPIs (59 Runs)")
+    r = write_df_to_sheet(
+        ws2,
+        kpi_df,
+        start_row=1,
+        title=f"Overall Production & Downtime KPIs ({len(run_df)} Runs)",
+    )
     r = write_df_to_sheet(ws2, product_df, start_row=r + 1, title="Comparison by Bottle Size (3L vs 5L)")
     write_df_to_sheet(ws2, top_dt_df, start_row=r + 1, title="Top 5 Runs by Pause Hours")
 
@@ -254,6 +305,15 @@ def build_report_text(run_df, kpi_df, product_df, monthly_df):
     max_diff_h = float(diff.abs().max()) if len(run_df) else 0.0
     max_diff_min = max_diff_h * 60.0
 
+    source_rate = run_df["gallons_per_hour"]
+    operating_rate = run_df["production_units"] / run_df["operation_time_dec"]
+    monitored_rate = run_df["production_units"] / run_df["monitored_time_dec"]
+    op_rate_matches = int((source_rate - operating_rate).abs().lt(0.01).sum())
+    monitored_rate_matches = int(
+        (source_rate - monitored_rate).abs().lt(0.01).sum()
+    )
+    unmatched_rates = runs - op_rate_matches - monitored_rate_matches
+
     subtitle_dates = f"Beverage Bottling Line Operations ({min_date} to {max_date}) | Zenodo DOI: 10.5281/zenodo.18146866 (CC BY 4.0)"
     kpi_title = f"Overall KPI Summary ({runs} Runs / {unique_dates} Dates)"
     month_title = f"Monthly Summary ({min_month} to {max_month})"
@@ -278,8 +338,9 @@ def build_report_text(run_df, kpi_df, product_df, monthly_df):
         f"({net_diff_h:+.2f} h cumulative net diff; max single-run diff {max_diff_h:.3f} h / {max_diff_min:.1f} min). "
         f"Source data is unaltered and discrepancies are not mere rounding errors; efficiency ({w_eff:.2f}%) and "
         f"downtime ({w_dt:.2f}%) are computed independently from monitored time, so their sum ({w_eff + w_dt:.2f}%) differs from 100%. "
-        "(3) Source gallons_per_hour uses units/operating_time in rows 1-18 and units/monitored_time in most later rows, "
-        "so consistent operating-hour rates are reported separately. (4) No fault codes exist; pauses are not assumed breakdowns.",
+        f"(3) Source gallons_per_hour matches units/operating_time in {op_rate_matches} runs and units/monitored_time "
+        f"in {monitored_rate_matches} runs; {unmatched_rates} run matches neither within 0.01. Consistent "
+        "operating-hour rates are therefore reported separately. (4) No fault codes exist; pauses are not assumed breakdowns.",
         102,
     )
     return subtitle_dates, prov, notes, kpi_title, month_title
@@ -338,7 +399,8 @@ def run_pipeline(base_dir):
     top_dt_df = run_df.nlargest(5, "pause_time_dec")[["date_str", "product_type_l", "production_units", "monitored_time_dec", "operation_time_dec", "pause_time_dec", "calc_efficiency_pct", "downtime_pct"]]
     out_dir = base / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_df.to_csv(out_dir / "daily_summary.csv", index=False)
+    run_df.to_csv(out_dir / "run_summary.csv", index=False)
+    daily_df.to_csv(out_dir / "daily_summary.csv", index=False)
     save_charts(daily_df, monthly_df, out_dir / "charts")
     save_excel(run_df, daily_df, kpi_df, product_df, monthly_df, top_dt_df, out_dir / "production_summary.xlsx")
     save_pdf_report(run_df, kpi_df, product_df, monthly_df, out_dir / "charts", base / "reports" / "production_report.pdf")
